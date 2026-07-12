@@ -1,0 +1,49 @@
+{
+  "name": "pi-cc-status",
+  "version": "0.1.0",
+  "description": "A Claude Code–style status line for pi — default in-process renderer plus optional command mode for full Claude Code statusline-script parity.",
+  "type": "module",
+  "author": "msdavid",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/msdavid/pi-cc-status.git"
+  },
+  "bugs": {
+    "url": "https://github.com/msdavid/pi-cc-status/issues"
+  },
+  "homepage": "https://github.com/msdavid/pi-cc-status#readme",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "extension",
+    "statusline",
+    "tui",
+    "claude-code"
+  ],
+  "files": [
+    "index.ts",
+    "config.ts",
+    "data.ts",
+    "render.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "pack:dry": "npm pack --dry-run"
+  }
+}
