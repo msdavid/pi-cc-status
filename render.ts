@@ -17,7 +17,7 @@ import { VERSION } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { Config, SegmentId } from "./config.ts";
-import { getLastAssistantUsage, getSessionCost, dirName, type GitCache } from "./data.ts";
+import { getLastAssistantUsage, getSessionCost, getSessionDurationMs, dirName, type GitCache } from "./data.ts";
 import { gatherStatusData } from "./data.ts";
 
 /** Shared mutable state between the footer factory, event handlers, and render(). */
@@ -34,6 +34,18 @@ export function freshState(): StatusState {
 	return { git: { branch: null, dirty: false, untracked: false }, tui: null, theme: null, footerData: null, lastWidth: 80 };
 }
 
+/** Format a millisecond duration as a compact "Hh Mm"/"Mm Ss"/"Ss" string. */
+function formatDuration(ms: number): string {
+	const totalSec = Math.floor(ms / 1000);
+	if (totalSec < 60) return `${totalSec}s`;
+	const totalMin = Math.floor(totalSec / 60);
+	const sec = totalSec % 60;
+	if (totalMin < 60) return `${totalMin}m ${sec}s`;
+	const hr = Math.floor(totalMin / 60);
+	const min = totalMin % 60;
+	return `${hr}h ${min}m`;
+}
+
 const SEGMENT_LABELS: Record<SegmentId, string> = {
 	model: "Model:",
 	dir: "Dir:",
@@ -42,6 +54,7 @@ const SEGMENT_LABELS: Record<SegmentId, string> = {
 	git: "Git:",
 	session: "Session:",
 	cost: "Cost:",
+	duration: "Duration:",
 	tokens: "Tokens:",
 	version: "pi:",
 	providers: "Providers:",
@@ -109,6 +122,11 @@ const SEGMENTS: Record<SegmentId, SegmentRenderer> = {
 		const cost = getSessionCost(ctx);
 		if (cost <= 0) return null;
 		return label("cost", config, theme) + theme.fg("dim", `$${cost.toFixed(4)}`);
+	},
+	duration: (ctx, _pi, _fd, theme, config) => {
+		const ms = getSessionDurationMs(ctx);
+		if (ms <= 0) return null;
+		return label("duration", config, theme) + theme.fg("dim", formatDuration(ms));
 	},
 	tokens: (ctx, _pi, _fd, theme, config) => {
 		const cu = ctx.getContextUsage();

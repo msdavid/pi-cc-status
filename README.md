@@ -90,6 +90,7 @@ Available ids for the `segments` array:
 | `git` | Branch + dirty(`!`)/untracked(`?`) markers |
 | `session` | Session name (if set) |
 | `cost` | Accumulated session cost (`$X.XXXX`) |
+| `duration` | Elapsed wall-clock time since session start (`Hh Mm`/`Mm Ss`/`Ss`) |
 | `tokens` | Context tokens / window size |
 | `version` | pi version |
 | `providers` | Count of available providers |

@@ -50,6 +50,8 @@ export default function (pi: ExtensionAPI) {
 				void refreshGitStatus(pi, ctx.cwd, state.git).then((g) => {
 					state.git = g;
 				});
+				// Duration segment is time-based — tick the render while idle.
+				if (config.segments.includes("duration")) requestRender();
 			}, config.refreshSeconds * 1000);
 			if (typeof gitTimer.unref === "function") gitTimer.unref();
 		}

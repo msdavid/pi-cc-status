@@ -88,7 +88,7 @@ export function getSessionCost(ctx: ExtensionContext): number {
 }
 
 /** Wall-clock duration since session start, from the session header timestamp. */
-function sessionDurationMs(ctx: ExtensionContext): number {
+export function getSessionDurationMs(ctx: ExtensionContext): number {
 	const header = ctx.sessionManager.getHeader();
 	if (!header?.timestamp) return 0;
 	const start = Date.parse(header.timestamp);
@@ -144,7 +144,7 @@ export function gatherStatusData(
 		thinking: { enabled: pi.getThinkingLevel() !== "minimal" },
 		cost: {
 			total_cost_usd: getSessionCost(ctx),
-			total_duration_ms: sessionDurationMs(ctx),
+			total_duration_ms: getSessionDurationMs(ctx),
 			total_api_duration_ms: 0, // not tracked by pi
 			total_lines_added: 0, // not tracked by pi
 			total_lines_removed: 0, // not tracked by pi

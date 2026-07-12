@@ -70,6 +70,7 @@ export type SegmentId =
 	| "git"
 	| "session"
 	| "cost"
+	| "duration"
 	| "tokens"
 	| "version"
 	| "providers";
