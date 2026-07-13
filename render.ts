@@ -172,7 +172,10 @@ export class CommandRunner {
 		if (this.debounce) clearTimeout(this.debounce);
 		this.debounce = setTimeout(() => {
 			this.debounce = null;
-			void this.run(ctx, pi, footerData, tui);
+			// run() is deferred, so the ctx it closed over may have gone stale
+			// (session replacement/reload) by the time it fires. run() guards its
+			// ctx access; .catch() keeps any residual rejection unhandled-proof.
+			void this.run(ctx, pi, footerData, tui).catch(() => {});
 		}, 300);
 	}
 
@@ -184,15 +187,26 @@ export class CommandRunner {
 		}
 		const command = this.config.command;
 		if (!command) return;
-		const data = gatherStatusData(ctx, pi, footerData, this.state.git);
-		const json = JSON.stringify(data);
+		// gatherStatusData and ctx.cwd access getters that throw once this ctx is
+		// stale after session replacement/reload. This run may be deferred past
+		// that point (debounce timer / cmdRefreshTimer), so bail silently — the
+		// new session's runner renders fresh data via session_start.
+		let json = "";
+		let cwd = "";
+		try {
+			const data = gatherStatusData(ctx, pi, footerData, this.state.git);
+			json = JSON.stringify(data);
+			cwd = ctx.cwd;
+		} catch {
+			return;
+		}
 		const env = {
 			...process.env,
 			COLUMNS: String(this.state.lastWidth || 80),
 			LINES: String(process.stdout.rows ?? 24),
 		};
 		try {
-			const child = spawn(command, { shell: true, env, cwd: ctx.cwd, stdio: ["pipe", "pipe", "pipe"] });
+			const child = spawn(command, { shell: true, env, cwd, stdio: ["pipe", "pipe", "pipe"] });
 			this.child = child;
 			let out = "";
 			child.stdout?.on("data", (d) => { out += d.toString(); });

@@ -44,10 +44,15 @@ export default function (pi: ExtensionAPI) {
 
 	function armTimers(ctx: ExtensionContext): void {
 		stopTimers();
+		// cwd is immutable for a session's lifetime. Capture it as a string so the
+		// interval never touches ctx.cwd (a getter that throws once this ctx goes
+		// stale after session replacement/reload). pi.exec's stale throw is already
+		// swallowed by refreshGitStatus's try/catch.
+		const cwd = ctx.cwd;
 		// Git dirty/untracked poll (default mode only — command mode gets it from data).
 		if (!config.command && config.refreshSeconds > 0) {
 			gitTimer = setInterval(() => {
-				void refreshGitStatus(pi, ctx.cwd, state.git).then((g) => {
+				void refreshGitStatus(pi, cwd, state.git).then((g) => {
 					state.git = g;
 				});
 				// Duration segment is time-based — tick the render while idle.
