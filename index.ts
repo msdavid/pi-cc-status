@@ -42,6 +42,15 @@ export default function (pi: ExtensionAPI) {
 		}
 	}
 
+	/**
+	 * Clamp a seconds value to a valid setInterval delay. Delays > 2^31-1 ms
+	 * overflow and make Node fire the timer every 1ms — a config typo would
+	 * busy-spin pi.
+	 */
+	function intervalDelay(seconds: number): number {
+		return Math.min(seconds * 1000, 2 ** 31 - 1);
+	}
+
 	function armTimers(ctx: ExtensionContext): void {
 		stopTimers();
 		// cwd is immutable for a session's lifetime. Capture it as a string so the
@@ -49,24 +58,34 @@ export default function (pi: ExtensionAPI) {
 		// stale after session replacement/reload). pi.exec's stale throw is already
 		// swallowed by refreshGitStatus's try/catch.
 		const cwd = ctx.cwd;
+		// Timer callbacks are bare Node timers: a synchronous throw escapes as an
+		// uncaughtException and kills pi, so both bodies are wrapped.
 		// Git dirty/untracked poll (default mode only — command mode gets it from data).
 		if (!config.command && config.refreshSeconds > 0) {
 			gitTimer = setInterval(() => {
-				void refreshGitStatus(pi, cwd, state.git).then((g) => {
-					state.git = g;
-				});
-				// Duration segment is time-based — tick the render while idle.
-				if (config.segments.includes("duration")) requestRender();
-			}, config.refreshSeconds * 1000);
+				try {
+					void refreshGitStatus(pi, cwd, state.git).then((g) => {
+						state.git = g;
+					});
+					// Duration segment is time-based — tick the render while idle.
+					if (config.segments.includes("duration")) requestRender();
+				} catch {
+					// Skip this tick; never crash the host.
+				}
+			}, intervalDelay(config.refreshSeconds));
 			if (typeof gitTimer.unref === "function") gitTimer.unref();
 		}
 		// Command-mode periodic re-run (optional).
 		if (config.command && config.commandRefreshSeconds && config.commandRefreshSeconds > 0) {
 			cmdRefreshTimer = setInterval(() => {
-				if (enabled && state.tui && state.footerData) {
-					runner?.schedule(ctx, pi, state.footerData, state.tui);
+				try {
+					if (enabled && state.tui && state.footerData) {
+						runner?.schedule(ctx, pi, state.footerData, state.tui);
+					}
+				} catch {
+					// Skip this tick; never crash the host.
 				}
-			}, config.commandRefreshSeconds * 1000);
+			}, intervalDelay(config.commandRefreshSeconds));
 			if (typeof cmdRefreshTimer.unref === "function") cmdRefreshTimer.unref();
 		}
 	}
@@ -91,11 +110,14 @@ export default function (pi: ExtensionAPI) {
 		enabled = true;
 		reload(ctx);
 
-		// Initial git refresh (async, non-blocking).
-		void refreshGitStatus(pi, ctx.cwd, state.git).then((g) => {
-			state.git = g;
-			requestRender();
-		});
+		// Initial git refresh (async, non-blocking). pi installs no
+		// unhandledRejection handler, so the chain must never reject.
+		void refreshGitStatus(pi, ctx.cwd, state.git)
+			.then((g) => {
+				state.git = g;
+				requestRender();
+			})
+			.catch(() => {});
 
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			state.tui = tui;
@@ -103,9 +125,15 @@ export default function (pi: ExtensionAPI) {
 			state.footerData = footerData;
 
 			const unsub = footerData.onBranchChange(() => {
-				state.git = { ...state.git, branch: footerData.getGitBranch() };
-				requestRender();
-				if (config.command) triggerCommand(ctx);
+				// pi dispatches branch-change listeners unguarded (and from a
+				// void'd async chain) — a throw here would take down the host.
+				try {
+					state.git = { ...state.git, branch: footerData.getGitBranch() };
+					requestRender();
+					if (config.command) triggerCommand(ctx);
+				} catch {
+					// Skip this update; never crash the host.
+				}
 			});
 			state.git = { ...state.git, branch: footerData.getGitBranch() };
 

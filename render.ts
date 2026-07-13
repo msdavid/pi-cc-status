@@ -209,15 +209,29 @@ export class CommandRunner {
 			const child = spawn(command, { shell: true, env, cwd, stdio: ["pipe", "pipe", "pipe"] });
 			this.child = child;
 			let out = "";
+			// stdio streams emit 'error' events of their own (EPIPE when the
+			// script exits without reading stdin, ERR_STREAM_DESTROYED after a
+			// spawn failure). Unhandled they become an uncaughtException and
+			// kill pi — child.on("error") does NOT cover them.
+			const swallow = () => {};
+			child.stdin?.on("error", swallow);
+			child.stdout?.on("error", swallow);
+			child.stderr?.on("error", swallow);
 			child.stdout?.on("data", (d) => { out += d.toString(); });
 			child.stderr?.on("data", () => { /* swallow; failures just yield no lines */ });
 			child.on("error", () => { if (this.child === child) this.child = null; });
 			child.on("close", () => {
-				if (this.child === child) this.child = null;
-				const lines = out.split("\n");
-				if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-				this.lines = lines;
-				tui.requestRender();
+				// Runs from a child-process event — a throw here would also be an
+				// uncaughtException.
+				try {
+					if (this.child === child) this.child = null;
+					const lines = out.split("\n");
+					if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+					this.lines = lines;
+					tui.requestRender();
+				} catch {
+					// Keep previous lines; never crash the host.
+				}
 			});
 			child.stdin?.write(json);
 			child.stdin?.end();
