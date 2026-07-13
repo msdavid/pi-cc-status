@@ -1,6 +1,6 @@
 {
   "name": "pi-cc-status",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A Claude Code–style status line for pi — default in-process renderer plus optional command mode for full Claude Code statusline-script parity.",
   "type": "module",
   "author": "msdavid",

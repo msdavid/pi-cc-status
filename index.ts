@@ -120,7 +120,16 @@ export default function (pi: ExtensionAPI) {
 					if (!config.enabled) return [];
 					state.lastWidth = width;
 					if (config.command && runner) return runner.getLines(width);
-					return renderDefault(ctx, pi, footerData, theme, config, state, width);
+					// renderDefault reads ctx getters (model, context usage, session
+					// entries) that throw once this footer outlives its session — the
+					// TUI render loop does not guard component render(), so a throw
+					// here would kill pi. Render nothing; the new session's instance
+					// re-registers the footer.
+					try {
+						return renderDefault(ctx, pi, footerData, theme, config, state, width);
+					} catch {
+						return [];
+					}
 				},
 			};
 		});
