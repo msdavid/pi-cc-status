@@ -17,7 +17,7 @@ import { VERSION } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { Config, SegmentId } from "./config.ts";
-import { getLastAssistantUsage, getSessionCost, getSessionDurationMs, dirName, type GitCache } from "./data.ts";
+import { getLastAssistantUsage, getSessionCostBreakdown, getSessionDurationMs, dirName, type GitCache } from "./data.ts";
 import { gatherStatusData } from "./data.ts";
 
 /** Shared mutable state between the footer factory, event handlers, and render(). */
@@ -119,9 +119,15 @@ const SEGMENTS: Record<SegmentId, SegmentRenderer> = {
 		return name ? label("session", config, theme) + theme.fg("dim", name) : null;
 	},
 	cost: (ctx, _pi, _fd, theme, config) => {
-		const cost = getSessionCost(ctx);
-		if (cost <= 0) return null;
-		return label("cost", config, theme) + theme.fg("dim", `$${cost.toFixed(4)}`);
+		const costs = getSessionCostBreakdown(ctx);
+		if (costs.total <= 0) return null;
+		let seg = `$${costs.total.toFixed(4)}`;
+		// Nested/child spend is shown as a suffix so the session-only figure
+		// stays legible. "sub" covers any linked child sessions (subagents,
+		// workflow children, forks) — whatever reported through pi's standard
+		// channels.
+		if (costs.children > 0) seg += theme.fg("muted", ` (+$${costs.children.toFixed(4)} sub)`);
+		return label("cost", config, theme) + theme.fg("dim", seg);
 	},
 	duration: (ctx, _pi, _fd, theme, config) => {
 		const ms = getSessionDurationMs(ctx);

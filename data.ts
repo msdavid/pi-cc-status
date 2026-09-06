@@ -15,12 +15,12 @@
  * are reported as 0 where the schema expects a number.
  */
 
-import { basename } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync, type Stats } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { VERSION } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import type { ReadonlyFooterDataProvider } from "@earendil-works/pi-coding-agent";
-
 export interface GitCache {
 	branch: string | null;
 	dirty: boolean;
@@ -56,6 +56,10 @@ export interface StatusData {
 	thinking: { enabled: boolean };
 	cost: {
 		total_cost_usd: number;
+		/** Nested LLM cost reported via pi's standard toolResult/compaction channel. */
+		nested_cost_usd?: number;
+		/** Cost from child sessions linked via the pi-core parentSession header. */
+		child_session_cost_usd?: number;
 		total_duration_ms: number;
 		total_api_duration_ms: number;
 		total_lines_added: number;
@@ -78,13 +82,251 @@ export function getLastAssistantUsage(ctx: ExtensionContext): Usage | null {
 
 /** Sum cost across all assistant messages in the branch (best-effort session total). */
 export function getSessionCost(ctx: ExtensionContext): number {
-	let total = 0;
-	for (const e of ctx.sessionManager.getBranch()) {
-		if (e.type === "message" && e.message.role === "assistant") {
-			total += (e.message as AssistantMessage).usage.cost.total;
+	return getSessionCostBreakdown(ctx).total;
+}
+
+/**
+ * Extract a finite cost number from a pi `Usage` object. Pi's Usage carries
+ * `cost: { input, output, cacheRead, cacheWrite, total }`; some sources (e.g.
+ * nested-work transcripts) use a bare number. Anything non-finite is 0.
+ */
+export function usageCostTotal(usage: unknown): number {
+	if (!usage || typeof usage !== "object") return 0;
+	const raw = (usage as { cost?: unknown }).cost;
+	const value = typeof raw === "number" ? raw : typeof raw === "object" && raw !== null ? (raw as { total?: unknown }).total : undefined;
+	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/** Cost breakdown for the current session tree. */
+export interface SessionCostBreakdown {
+	/** Assistant-message cost in the parent session branch. */
+	own: number;
+	/**
+	 * Nested LLM cost reported through pi's standard channel: `usage` on
+	 * toolResult entries (any tool that made nested model calls) plus
+	 * compaction / branch-summary usage. Mirrors pi's native getSessionStats()
+	 * semantics — extension-agnostic: any extension that reports nested usage
+	 * is counted, absent extensions simply contribute nothing.
+	 */
+	nested: number;
+	/** Cost from child session files linked via the `parentSession` header (pi-core field). */
+	children: number;
+	/** own + nested + children. */
+	total: number;
+}
+
+/**
+ * Compute the cost breakdown for the session. Never throws: a stale ctx
+ * (session replacement/reload) or malformed entries degrade to zeros.
+ */
+export function getSessionCostBreakdown(ctx: ExtensionContext): SessionCostBreakdown {
+	let own = 0;
+	let nested = 0;
+	try {
+		for (const e of ctx.sessionManager.getBranch()) {
+			if (e.type === "compaction" || e.type === "branch_summary") {
+				nested += usageCostTotal((e as { usage?: unknown }).usage);
+				continue;
+			}
+			if (e.type !== "message") continue;
+			const role = (e.message as { role?: string }).role;
+			if (role === "assistant") {
+				own += usageCostTotal((e.message as AssistantMessage).usage);
+			} else if (role === "toolResult") {
+				nested += usageCostTotal((e.message as { usage?: unknown }).usage);
+			}
+		}
+	} catch {
+		// Stale ctx or unreadable branch — degrade to what we have.
+	}
+	let children = 0;
+	try {
+		children = getChildSessionsCost(ctx.sessionManager.getSessionFile());
+	} catch {
+		// Filesystem issues — children just contribute nothing.
+	}
+	return { own, nested, children, total: own + nested + children };
+}
+
+/*
+ * Linked child-session cost scanning.
+ *
+ * pi-core writes a `parentSession` header field on sessions created via
+ * /fork, /clone, or newSession({ parentSession }) — it is part of the session
+ * format, not any extension's contract. Any agent that links its child
+ * sessions through this field is therefore counted here automatically;
+ * agents that don't (e.g. in-memory children) are invisible to a passive
+ * reader and simply contribute nothing. All filesystem access is guarded.
+ */
+
+interface ChildFileRecord {
+	mtimeMs: number;
+	size: number;
+	/** parentSession header value ("" when absent/unreadable). */
+	parent: string;
+	/** Cached full-file cost — only computed for linked children. */
+	cost: number;
+}
+
+interface ChildScanCache {
+	parentFile: string;
+	dir: string;
+	at: number;
+	total: number;
+	files: Map<string, ChildFileRecord>;
+}
+
+const CHILD_SCAN_TTL_MS = 2000;
+const HEADER_PEEK_BYTES = 8192;
+
+let childCache: ChildScanCache | null = null;
+
+/** Read the session header (first JSONL line) of a session file. */
+function readSessionHeader(path: string): { parentSession?: unknown } | null {
+	let fd: number | undefined;
+	try {
+		// fs.openSync + read avoids reading multi-MB session files whole just
+		// for the first line.
+		fd = openSync(path, "r");
+		const buf = Buffer.alloc(HEADER_PEEK_BYTES);
+		const bytes = readSync(fd, buf, 0, buf.length, 0);
+		const head = buf.subarray(0, bytes).toString("utf8");
+		const nl = head.indexOf("\n");
+		const line = nl === -1 ? head : head.slice(0, nl);
+		const parsed = JSON.parse(line);
+		return parsed && typeof parsed === "object" ? (parsed as { parentSession?: unknown }) : null;
+	} catch {
+		return null;
+	} finally {
+		if (fd !== undefined) {
+			try {
+				closeSync(fd);
+			} catch {
+				/* ignore */
+			}
 		}
 	}
-	return total;
+}
+
+/**
+ * Sum usage cost over a whole session JSONL file, using the same entry
+ * semantics as pi's native getSessionStats(): assistant + toolResult usage,
+ * plus compaction / branch-summary usage.
+ */
+export function computeSessionFileCost(path: string): number {
+	try {
+		const content = readFileSync(path, "utf8");
+		let total = 0;
+		for (const line of content.split("\n")) {
+			if (!line.trim()) continue;
+			try {
+				const entry = JSON.parse(line) as {
+					type?: string;
+					usage?: unknown;
+					message?: { role?: string; usage?: unknown };
+				};
+				if (entry.type === "compaction" || entry.type === "branch_summary") {
+					total += usageCostTotal(entry.usage);
+					continue;
+				}
+				if (entry.type !== "message" || !entry.message) continue;
+				if (entry.message.role === "assistant" || entry.message.role === "toolResult") {
+					total += usageCostTotal(entry.message.usage);
+				}
+			} catch {
+				// Skip malformed lines.
+			}
+		}
+		return total;
+	} catch {
+		return 0;
+	}
+}
+
+/**
+ * Total cost of all session files linked (transitively) to `parentSessionFile`
+ * via the pi-core `parentSession` header. Cached: full rescans are throttled
+ * to one per CHILD_SCAN_TTL_MS, and unchanged files (mtime+size) are not
+ * re-parsed. Never throws.
+ */
+export function getChildSessionsCost(parentSessionFile: string | null | undefined): number {
+	if (!parentSessionFile) return 0;
+	const now = Date.now();
+	const dir = dirname(parentSessionFile);
+	if (childCache && childCache.parentFile === parentSessionFile && childCache.dir === dir && now - childCache.at < CHILD_SCAN_TTL_MS) {
+		return childCache.total;
+	}
+
+	const files = childCache && childCache.parentFile === parentSessionFile && childCache.dir === dir ? childCache.files : new Map<string, ChildFileRecord>();
+
+	try {
+		const names = readdirSync(dir);
+		const seen = new Set<string>();
+		for (const name of names) {
+			if (!name.endsWith(".jsonl")) continue;
+			const path = join(dir, name);
+			seen.add(path);
+			let stat: Stats;
+			try {
+				stat = statSync(path);
+			} catch {
+				files.delete(path);
+				continue;
+			}
+			const prev = files.get(path);
+			if (prev && prev.mtimeMs === stat.mtimeMs && prev.size === stat.size) continue; // unchanged — reuse
+			const header = readSessionHeader(path);
+			const parent = typeof header?.parentSession === "string" ? header.parentSession : "";
+			const isLinkedChild = parent !== "";
+			const cost = isLinkedChild ? computeSessionFileCost(path) : 0;
+			files.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, parent, cost });
+		}
+		// Forget files that disappeared.
+		for (const path of files.keys()) {
+			if (!seen.has(path)) files.delete(path);
+		}
+
+		// Walk the link graph transitively from the parent. Link comparison is
+		// done on both the raw header string and the resolved absolute path, so
+		// relative or differently-normalized headers still match. Each node is
+		// processed exactly once (raw and resolved forms are aliases), so shared
+		// children and cycles cannot double-count.
+		let resolvedParent: string;
+		try {
+			resolvedParent = resolve(parentSessionFile);
+		} catch {
+			resolvedParent = parentSessionFile;
+		}
+		const stack = [parentSessionFile, resolvedParent];
+		const processed = new Set<string>();
+		let total = 0;
+		for (;;) {
+			const current = stack.pop();
+			if (current === undefined) break;
+			if (processed.has(current)) continue;
+			processed.add(current);
+			let resolvedCurrent: string;
+			try {
+				resolvedCurrent = resolve(current);
+			} catch {
+				resolvedCurrent = current;
+			}
+			if (resolvedCurrent !== current && processed.has(resolvedCurrent)) continue;
+			processed.add(resolvedCurrent);
+			for (const [path, rec] of files) {
+				if (rec.parent !== current && rec.parent !== resolvedCurrent) continue;
+				total += rec.cost;
+				if (!processed.has(path)) stack.push(path);
+			}
+		}
+
+		childCache = { parentFile: parentSessionFile, dir, at: now, total, files };
+		return total;
+	} catch {
+		// Unreadable directory — cache the zero so we don't rescan every render.
+		childCache = { parentFile: parentSessionFile, dir, at: now, total: 0, files };
+		return 0;
+	}
 }
 
 /** Wall-clock duration since session start, from the session header timestamp. */
@@ -109,6 +351,7 @@ export function gatherStatusData(
 	const cwd = ctx.cwd;
 	const usage = getLastAssistantUsage(ctx);
 	const cu = ctx.getContextUsage();
+	const costs = getSessionCostBreakdown(ctx);
 
 	const totalInput = cu?.tokens ?? 0;
 	const totalOutput = usage?.output ?? 0;
@@ -143,7 +386,9 @@ export function gatherStatusData(
 		exceeds_200k_tokens: totalInput + totalOutput > 200000,
 		thinking: { enabled: pi.getThinkingLevel() !== "minimal" },
 		cost: {
-			total_cost_usd: getSessionCost(ctx),
+			total_cost_usd: costs.total,
+			nested_cost_usd: costs.nested,
+			child_session_cost_usd: costs.children,
 			total_duration_ms: getSessionDurationMs(ctx),
 			total_api_duration_ms: 0, // not tracked by pi
 			total_lines_added: 0, // not tracked by pi

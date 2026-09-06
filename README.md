@@ -89,11 +89,22 @@ Available ids for the `segments` array:
 | `context` | Context-window bar gauge + % + cache % |
 | `git` | Branch + dirty(`!`)/untracked(`?`) markers |
 | `session` | Session name (if set) |
-| `cost` | Accumulated session cost (`$X.XXXX`) |
+| `cost` | Accumulated session cost (`$X.XXXX`, `+$Y.YYYY sub` when linked child sessions report spend) |
 | `duration` | Elapsed wall-clock time since session start (`Hh Mm`/`Mm Ss`/`Ss`) |
 | `tokens` | Context tokens / window size |
 | `version` | pi version |
 | `providers` | Count of available providers |
+
+### Cost accounting (v0.2.0+)
+
+The cost segment and `cost.total_cost_usd` cover the **whole session tree**, using only pi-core mechanisms — no extension is required or special-cased:
+
+1. **Parent session** — assistant messages, plus nested LLM usage reported through pi's standard channel (`usage` on `toolResult` entries, compaction, and branch summaries). This mirrors pi's native `/session` stats, so any tool that reports nested model work (subagents, workflows, summarizers) is counted automatically; extensions that are absent or report nothing simply contribute nothing.
+2. **Linked child sessions** — session files whose header carries pi-core's `parentSession` field pointing at the current session (directly or transitively), e.g. sessions created via `/fork`, `/clone`, or `newSession({ parentSession })`. When this contributes, the segment renders as `$0.0123 +$0.0456 sub`.
+
+Scans are cached (2s TTL + per-file mtime/size) and never re-parse unchanged files. Usage that goes through neither channel (e.g. children run with `--no-session`) cannot be observed passively and is not counted.
+
+The command-mode JSON additionally exposes `cost.nested_cost_usd` and `cost.child_session_cost_usd` for scripts that want the split.
 
 ## Command mode (Claude Code parity)
 
@@ -188,6 +199,20 @@ In command mode, accessibility is the script's responsibility — and **you can 
 - Node.js >= 20
 
 Pi core packages (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, `@earendil-works/pi-tui`) are provided by pi at runtime as peer dependencies — this package has no runtime dependencies of its own.
+
+## Development
+
+```bash
+# Symlink the peer packages (adjust to where pi is installed on your machine):
+mkdir -p node_modules/@earendil-works
+ln -s "$(npm root -g)/@earendil-works/pi-coding-agent" node_modules/@earendil-works/
+ln -s "$(npm root -g)/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui" node_modules/@earendil-works/
+ln -s "$(npm root -g)/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai" node_modules/@earendil-works/
+ln -s "$(npm root -g)/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-agent-core" node_modules/@earendil-works/
+
+node --test test/                          # unit tests
+node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json   # typecheck (after: npm i --no-save typescript @types/node)
+```
 
 ## License
 

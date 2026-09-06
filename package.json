@@ -1,7 +1,7 @@
 {
   "name": "pi-cc-status",
-  "version": "0.1.4",
-  "description": "A Claude Code–style status line for pi — default in-process renderer plus optional command mode for full Claude Code statusline-script parity.",
+  "version": "0.2.0",
+  "description": "A Claude Code\u2013style status line for pi \u2014 default in-process renderer plus optional command mode for full Claude Code statusline-script parity.",
   "type": "module",
   "author": "msdavid",
   "license": "MIT",
@@ -44,6 +44,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "pack:dry": "npm pack --dry-run"
+    "pack:dry": "npm pack --dry-run",
+    "test": "node --test test/"
   }
 }
