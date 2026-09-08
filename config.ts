@@ -50,6 +50,8 @@ export interface Config {
 	refreshSeconds: number;
 	/** Show cache-read % alongside the context bar. */
 	showCachePercent: boolean;
+	/** Show the OpenRouter-routed upstream endpoint as a suffix on the model segment. */
+	showModelEndpoint: boolean;
 	/** Accessibility presentation overrides. */
 	accessibility: AccessibilityConfig;
 	/**
@@ -86,6 +88,7 @@ export function defaultConfig(): Config {
 		thresholds: { warning: 80, error: 95 },
 		refreshSeconds: 2,
 		showCachePercent: true,
+		showModelEndpoint: true,
 		accessibility: { enabled: false, labels: true, plainBar: true },
 		command: null,
 		commandRefreshSeconds: null,

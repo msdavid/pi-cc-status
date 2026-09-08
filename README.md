@@ -51,6 +51,7 @@ Both files are optional. Example with all fields:
   "thresholds": { "warning": 80, "error": 95 },
   "refreshSeconds": 2,
   "showCachePercent": true,
+  "showModelEndpoint": true,
   "accessibility": {
     "enabled": false,
     "labels": true,
@@ -71,6 +72,7 @@ Both files are optional. Example with all fields:
 | `thresholds.warning` / `.error` | `80` / `95` | Context % color escalation |
 | `refreshSeconds` | `2` | Background git-status poll interval (default mode). `0` disables |
 | `showCachePercent` | `true` | Show cache-read % next to the context bar |
+| `showModelEndpoint` | `true` | Show the OpenRouter-routed upstream endpoint as a suffix on the model segment (see below) |
 | `accessibility.enabled` | `false` | Enable accessible presentation |
 | `accessibility.labels` | `true` | Prefix segments with semantic labels (`Model:`, …) |
 | `accessibility.plainBar` | `true` | Use `=` / `-` instead of Unicode block glyphs |
@@ -83,7 +85,7 @@ Available ids for the `segments` array:
 
 | Id | Shows |
 |---|---|
-| `model` | Active model name/id |
+| `model` | Active model name/id, plus ` @Endpoint` suffix when OpenRouter attribution is known |
 | `dir` | Working-directory basename |
 | `effort` | Thinking level (`minimal`/`low`/`medium`/`high`/`xhigh`) |
 | `context` | Context-window bar gauge + % + cache % |
@@ -105,6 +107,16 @@ The cost segment and `cost.total_cost_usd` cover the **whole session tree**, usi
 Scans are cached (2s TTL + per-file mtime/size) and never re-parse unchanged files. Usage that goes through neither channel (e.g. children run with `--no-session`) cannot be observed passively and is not counted.
 
 The command-mode JSON additionally exposes `cost.nested_cost_usd` and `cost.child_session_cost_usd` for scripts that want the split.
+
+### OpenRouter endpoint attribution (v0.3.0+)
+
+When the active model is served by **OpenRouter**, pi only ever sees the provider name `openrouter` — which upstream inference provider (Modal, Novita, …) actually handled each request is invisible to pi. pi-cc-status resolves it dynamically:
+
+1. OpenRouter responses carry an `x-generation-id` header.
+2. After each response, the extension looks up `GET openrouter.ai/api/v1/generation?id=<id>` using your OpenRouter credential and reads `data.provider_name`.
+3. The model segment renders as e.g. `GLM 5.3 Flash @Modal` (suffix dimmed).
+
+The lookup is off the render path, retries briefly (OpenRouter writes generation metadata asynchronously), and on any failure leaves the previous value or omits the suffix. The suffix is the endpoint that served the **last completed response** — it can briefly lag a mid-session provider failover. Set `showModelEndpoint: false` to disable. Non-OpenRouter models are unaffected.
 
 ## Command mode (Claude Code parity)
 

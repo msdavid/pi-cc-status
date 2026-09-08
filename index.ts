@@ -18,6 +18,7 @@ import { dirname } from "node:path";
 import type { Config } from "./config.ts";
 import { loadConfig, globalConfigPath, defaultConfig } from "./config.ts";
 import { refreshGitStatus, EMPTY_GIT } from "./data.ts";
+import { extractGenerationId, fetchEndpointName } from "./endpoint.ts";
 import { renderDefault, CommandRunner, freshState, type StatusState } from "./render.ts";
 
 export default function (pi: ExtensionAPI) {
@@ -94,6 +95,34 @@ export default function (pi: ExtensionAPI) {
 		if (gitTimer) { clearInterval(gitTimer); gitTimer = undefined; }
 		if (cmdRefreshTimer) { clearInterval(cmdRefreshTimer); cmdRefreshTimer = undefined; }
 	}
+
+	/** Monotonic counter — only the latest endpoint lookup may write state. */
+	let endpointJob = 0;
+
+	/**
+	 * Resolve the upstream endpoint OpenRouter routed the last response
+	 * through ("Modal", "Novita", …) and surface it as a dim suffix on the
+	 * model segment. Fire-and-forget: lookup happens off the render path and
+	 * failures silently leave the previous value (or nothing) displayed.
+	 */
+	pi.on("after_provider_response", async (event, ctx) => {
+		try {
+			if (!enabled || !config.showModelEndpoint) return;
+			if (ctx.model?.provider !== "openrouter") return;
+			const genId = extractGenerationId(event.headers);
+			if (!genId) return;
+			const job = ++endpointJob;
+			const auth = await ctx.modelRegistry.getProviderAuth("openrouter");
+			const apiKey = (auth as { auth?: { apiKey?: string } } | undefined)?.auth?.apiKey;
+			if (!apiKey || job !== endpointJob) return;
+			const name = await fetchEndpointName(genId, apiKey);
+			if (job !== endpointJob || !name) return;
+			state.endpoint = name;
+			requestRender();
+		} catch {
+			// Best-effort only — never crash the host.
+		}
+	});
 
 	/** Request a footer re-render. */
 	function requestRender(): void {
@@ -198,7 +227,12 @@ export default function (pi: ExtensionAPI) {
 	pi.on("turn_end", refresh);
 	pi.on("tool_execution_end", refresh);
 	pi.on("message_end", refresh);
-	pi.on("model_select", refresh);
+	pi.on("model_select", async (event, _ctx) => {
+		// Endpoint attribution is per-provider; drop it when leaving OpenRouter
+		// so the suffix never outlives the provider it described.
+		if (event.model?.provider !== "openrouter") state.endpoint = undefined;
+		await refresh(event, _ctx);
+	});
 	pi.on("thinking_level_select", refresh);
 	pi.on("session_info_changed", refresh);
 

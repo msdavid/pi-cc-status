@@ -28,6 +28,8 @@ export interface StatusState {
 	footerData: ReadonlyFooterDataProvider | null;
 	/** Last viewport width seen by render(), used for COLUMNS env in command mode. */
 	lastWidth: number;
+	/** Upstream endpoint (e.g. "Modal") that OpenRouter last routed through, when known. */
+	endpoint?: string;
 }
 
 export function freshState(): StatusState {
@@ -81,9 +83,10 @@ function barGauge(fraction: number, config: Config, theme: Theme): { filled: str
 }
 
 const SEGMENTS: Record<SegmentId, SegmentRenderer> = {
-	model: (ctx, _pi, _fd, theme, config) => {
+	model: (ctx, _pi, _fd, theme, config, state) => {
 		const m = ctx.model;
-		const text = m?.name ?? m?.id ?? "no-model";
+		let text = m?.name ?? m?.id ?? "no-model";
+		if (state.endpoint) text += theme.fg("dim", ` @${state.endpoint}`);
 		return label("model", config, theme) + theme.fg("accent", text);
 	},
 	dir: (ctx, _pi, _fd, theme, config) => label("dir", config, theme) + theme.fg("dim", dirName(ctx.cwd)),
