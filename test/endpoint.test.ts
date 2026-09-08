@@ -107,6 +107,20 @@ test("fetchEndpointName: network failure → null (never rejects)", async () => 
 	assert.equal(name, null);
 });
 
+test("fetchEndpointName: transient network failure retried, then success", async () => {
+	let n = 0;
+	const name = await fetchEndpointName("gen-abc", KEY, {
+		fetchImpl: async () => {
+			n++;
+			if (n === 1) throw new Error("transient");
+			return jsonResponse(200, OK_BODY);
+		},
+		delays: [0, 0, 0],
+	});
+	assert.equal(name, "Modal");
+	assert.equal(n, 2);
+});
+
 test("fetchEndpointName: URL-encodes the generation id", async () => {
 	let seen = "";
 	await fetchEndpointName("gen/abc+def", KEY, {

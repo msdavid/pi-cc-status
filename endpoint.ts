@@ -16,8 +16,8 @@
 
 const GENERATION_URL = "https://openrouter.ai/api/v1/generation";
 
-/** Default retry delays (ms) between generation-metadata attempts. */
-export const ENDPOINT_RETRY_DELAYS_MS = [0, 1500, 3000];
+/** Default retry delays (ms) between generation-metadata attempts (~25s window). */
+export const ENDPOINT_RETRY_DELAYS_MS = [0, 2000, 4000, 6000, 8000, 10000];
 
 /**
  * Extract the OpenRouter generation id from normalized response headers.
@@ -59,14 +59,16 @@ export interface FetchEndpointOptions {
 /**
  * Resolve the upstream provider name for a generation id.
  *
- * Retries on 404 (metadata not yet written) using `delays`. Any other
- * failure — auth, network, malformed body, exhausted retries — resolves
+ * Retries while metadata is not yet readable — 404 (OpenRouter writes
+ * generation records asynchronously) and transient network failures — using
+ * `delays`. Other failures (auth, malformed body, exhausted retries) resolve
  * null. Never rejects; callers treat null as "unknown this round".
  */
 export async function fetchEndpointName(genId: string, apiKey: string, options: FetchEndpointOptions = {}): Promise<string | null> {
 	const fetchImpl = options.fetchImpl ?? fetch;
 	const delays = options.delays ?? ENDPOINT_RETRY_DELAYS_MS;
 	const signal = options.signal;
+	let lastError: unknown = null;
 	for (let attempt = 0; attempt < delays.length; attempt++) {
 		try {
 			await sleep(delays[attempt] ?? 0, signal);
@@ -80,9 +82,12 @@ export async function fetchEndpointName(genId: string, apiKey: string, options: 
 			const body = (await res.json()) as { data?: { provider_name?: unknown } };
 			const name = body?.data?.provider_name;
 			return typeof name === "string" && name.trim() !== "" ? name.trim() : null;
-		} catch {
-			return null; // network/abort/parse failure — no point retrying blindly
+		} catch (error) {
+			lastError = error;
+			if (signal?.aborted) return null;
+			continue; // transient network failure — retry within the window
 		}
 	}
+	void lastError;
 	return null;
 }
