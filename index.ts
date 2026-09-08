@@ -137,6 +137,15 @@ export default function (pi: ExtensionAPI) {
 			});
 			state.git = { ...state.git, branch: footerData.getGitBranch() };
 
+			// Command mode renders whatever the runner has cached. Nothing is cached
+			// yet at session_start, so without an eager spawn the footer stays blank
+			// until the first refresh trigger (turn_end/message_end/...), a branch
+			// change, the commandRefreshSeconds tick, or /cc-status:reload. Spawn here
+			// rather than after setFooter(): triggerCommand() bails while state.tui is
+			// unset, and this factory is where it becomes available. schedule() only
+			// arms a 300ms debounce, so no spawn happens on this code path.
+			if (config.command) triggerCommand(ctx);
+
 			return {
 				dispose: () => {
 					unsub();
