@@ -105,23 +105,31 @@ export default function (pi: ExtensionAPI) {
 	 * model segment. Fire-and-forget: lookup happens off the render path and
 	 * failures silently leave the previous value (or nothing) displayed.
 	 */
-	pi.on("after_provider_response", async (event, ctx) => {
-		try {
-			if (!enabled || !config.showModelEndpoint) return;
-			if (ctx.model?.provider !== "openrouter") return;
-			const genId = extractGenerationId(event.headers);
-			if (!genId) return;
-			const job = ++endpointJob;
-			const auth = await ctx.modelRegistry.getProviderAuth("openrouter");
-			const apiKey = (auth as { auth?: { apiKey?: string } } | undefined)?.auth?.apiKey;
-			if (!apiKey || job !== endpointJob) return;
-			const name = await fetchEndpointName(genId, apiKey);
-			if (job !== endpointJob || !name) return;
-			state.endpoint = name;
-			requestRender();
-		} catch {
-			// Best-effort only — never crash the host.
-		}
+	pi.on("after_provider_response", (event, ctx) => {
+		// pi awaits after_provider_response handlers before finalizing the turn,
+		// so awaiting anything here (getProviderAuth, the 404-retry loop in
+		// fetchEndpointName) stalls every reply by seconds. The lookup therefore
+		// runs detached: the suffix simply appears when the metadata is readable.
+		// No TUI (pi -p) means no footer to decorate — skip entirely so scripted
+		// runs pay nothing and no pending fetch keeps the process alive at exit.
+		if (!enabled || !config.showModelEndpoint) return;
+		if (!state.tui || ctx.model?.provider !== "openrouter") return;
+		const genId = extractGenerationId(event.headers);
+		if (!genId) return;
+		const job = ++endpointJob;
+		void (async () => {
+			try {
+				const auth = await ctx.modelRegistry.getProviderAuth("openrouter");
+				const apiKey = (auth as { auth?: { apiKey?: string } } | undefined)?.auth?.apiKey;
+				if (!apiKey || job !== endpointJob) return;
+				const name = await fetchEndpointName(genId, apiKey);
+				if (job !== endpointJob || !name) return;
+				state.endpoint = name;
+				requestRender();
+			} catch {
+				// Best-effort only — never crash the host.
+			}
+		})();
 	});
 
 	/** Request a footer re-render. */
@@ -147,6 +155,12 @@ export default function (pi: ExtensionAPI) {
 				requestRender();
 			})
 			.catch(() => {});
+
+		// Some hosts ship a ui context without setFooter — pi-web-ui binds
+		// subagent conversations to a minimal uiContext (theme/setStatus/
+		// setWidget/notify only). Skip footer registration there instead of
+		// throwing: state.tui stays undefined and every refresh path no-ops.
+		if (typeof ctx.ui.setFooter !== "function") return;
 
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			state.tui = tui;
@@ -197,7 +211,8 @@ export default function (pi: ExtensionAPI) {
 		stopTimers();
 		runner?.dispose();
 		runner = null;
-		ctx.ui.setFooter(undefined);
+		// Same host contract as enable(): setFooter may be absent.
+		if (typeof ctx.ui.setFooter === "function") ctx.ui.setFooter(undefined);
 	}
 
 	// Lifecycle.
