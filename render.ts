@@ -175,7 +175,15 @@ export class CommandRunner {
 	private debounce: ReturnType<typeof setTimeout> | null = null;
 	private lines: string[] = [];
 
-	constructor(private config: Config, private state: StatusState) {}
+	private config: Config;
+	private state: StatusState;
+
+	// Field declarations instead of parameter properties: node's strip-only TS
+	// loader (node --test) cannot parse `constructor(private x)` syntax.
+	constructor(config: Config, state: StatusState) {
+		this.config = config;
+		this.state = state;
+	}
 
 	schedule(ctx: ExtensionContext, pi: ExtensionAPI, footerData: ReadonlyFooterDataProvider, tui: TUI): void {
 		if (this.debounce) clearTimeout(this.debounce);

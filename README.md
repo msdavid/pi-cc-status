@@ -116,7 +116,7 @@ When the active model is served by **OpenRouter**, pi only ever sees the provide
 2. After each response, the extension looks up `GET openrouter.ai/api/v1/generation?id=<id>` using your OpenRouter credential and reads `data.provider_name`.
 3. The model segment renders as e.g. `GLM 5.3 Flash @Modal` (suffix dimmed).
 
-The lookup is off the render path, retries up to ~25s (OpenRouter writes generation metadata asynchronously, often several seconds after the response), and on any failure leaves the previous value or omits the suffix. The suffix is the endpoint that served the **last completed response** — it can briefly lag a mid-session provider failover. Set `showModelEndpoint: false` to disable. Non-OpenRouter models are unaffected.
+The lookup runs **detached** from the response path: pi awaits `after_provider_response` handlers before finalizing a turn, so awaiting the lookup inline would stall every reply while the 404 retries spin (up to ~25s — OpenRouter writes generation metadata asynchronously, often several seconds after the response). Instead the handler returns immediately and the suffix appears whenever the metadata becomes readable; on failure the previous value stays or the suffix is omitted. The suffix is the endpoint that served the **last completed response** — it can briefly lag a mid-session provider failover. In non-TUI runs (`pi -p`) there is no footer to decorate, so the lookup is skipped entirely. Set `showModelEndpoint: false` to disable. Non-OpenRouter models are unaffected.
 
 ## Command mode (Claude Code parity)
 
